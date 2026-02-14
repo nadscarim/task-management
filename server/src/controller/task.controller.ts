@@ -107,4 +107,34 @@ export const taskControllers = {
       res.status(500).json({ error: "Failed to update task" });
     }
   },
+  deleteTask: async (req: Request, res: Response) => {
+    try {
+      const id = req.params.id as string;
+      const userId = req.token?.id;
+
+      const existingTask = await prisma.task.findFirst({
+        where: {
+          id,
+          userId,
+          deletedAt: null,
+        },
+      });
+
+      if (!existingTask) {
+        return res.status(404).json({ error: "Task not found" });
+      }
+
+      // Soft delete by setting deletedAt timestamp
+      await prisma.task.update({
+        where: { id },
+        data: {
+          deletedAt: new Date(),
+        },
+      });
+
+      res.status(200).json({ message: "Task deleted successfully" });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete task" });
+    }
+  },
 };
