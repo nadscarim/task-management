@@ -1,0 +1,128 @@
+trigger:
+  branches:
+    include:
+      - main
+      - development
+  paths:
+    include:
+      - client/**
+
+pool:
+  vmImage: "ubuntu-latest"
+
+variables:
+  # Update these variables for your project
+  nodeVersion: "18.x"
+  workingDirectory: "client"
+  buildOutputDirectory: "client/dist"
+
+  # Different environments
+  ${{ if eq(variables['Build.SourceBranchName'], 'main') }}:
+    environment: "production"
+    azureSubscription: "Your-Azure-Subscription-Production"
+    appServiceName: "taskmanager-client-prod"
+    resourceGroup: "taskmanager-prod-rg"
+  ${{ if eq(variables['Build.SourceBranchName'], 'development' }}:
+    environment: "development"
+    azureSubscription: "Your-Azure-Subscription-Dev"
+    appServiceName: "taskmanager-client-dev"
+    resourceGroup: "taskmanager-dev-rg"
+
+stages:
+  - stage: Build
+    displayName: "Build React App"
+    jobs:
+      - job: BuildJob
+        displayName: "Build and Test"
+        steps:
+          # Checkout code
+          - checkout: self
+            displayName: "Checkout Repository"
+
+          # Setup Node.js
+          - task: NodeTool@0
+            displayName: "Install Node.js"
+            inputs:
+              versionSpec: $(nodeVersion)
+
+          # Install dependencies
+          - script: |
+              cd $(workingDirectory)
+              npm ci
+            displayName: "npm ci - Install dependencies"
+
+          # Run linting
+          - script: |
+              cd $(workingDirectory)
+              npm run lint
+            displayName: "Run ESLint"
+            continueOnError: true
+
+          # Build the app with Vite
+          - script: |
+              cd $(workingDirectory)
+              npm run build
+            displayName: "Build React App (Vite)"
+            env:
+              VITE_API_URL: $(VITE_API_URL)
+
+          # Copy static files for SPA routing
+          - task: CopyFiles@2
+            displayName: "Copy web.config for SPA routing"
+            inputs:
+              SourceFolder: "$(workingDirectory)"
+              Contents: "web.config"
+              TargetFolder: "$(buildOutputDirectory)"
+              OverWrite: true
+            condition: succeededOrFailed()
+
+          # Publish build artifacts
+          - task: PublishBuildArtifacts@1
+            displayName: "Publish Artifacts"
+            inputs:
+              PathtoPublish: "$(buildOutputDirectory)"
+              ArtifactName: "client-drop"
+              publishLocation: "Container"
+
+  - stage: Deploy
+    displayName: "Deploy to Azure"
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - deployment: DeployWeb
+        displayName: "Deploy to App Service"
+        environment: $(environment)
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                # Download artifacts
+                - download: current
+                  artifact: "client-drop"
+                  displayName: "Download Build Artifacts"
+
+                # Deploy to Azure App Service
+                - task: AzureWebApp@1
+                  displayName: "Deploy to Azure App Service"
+                  inputs:
+                    azureSubscription: $(azureSubscription)
+                    appType: "webApp"
+                    appName: $(appServiceName)
+                    package: "$(Pipeline.Workspace)/client-drop"
+                    deploymentMethod: "auto"
+
+                # Configure App Settings
+                - task: AzureAppServiceSettings@1
+                  displayName: "Configure App Settings"
+                  inputs:
+                    azureSubscription: $(azureSubscription)
+                    appName: $(appServiceName)
+                    resourceGroupName: $(resourceGroup)
+                    appSettings: |
+                      [
+                        {
+                          "name": "WEBSITE_NODE_DEFAULT_VERSION",
+                          "value": "~18",
+                          "slotSetting": false
+                        }
+                      ]
