@@ -1,0 +1,157 @@
+trigger:
+  branches:
+    include:
+      - main
+      - development
+  paths:
+    include:
+      - server/**
+
+pool:
+  vmImage: "ubuntu-latest"
+
+variables:
+  # Update these variables for your project
+  nodeVersion: "18.x"
+  workingDirectory: "server"
+
+  # Different environments
+  ${{ if eq(variables['Build.SourceBranchName'], 'main') }}:
+    environment: "production"
+    azureSubscription: "Your-Azure-Subscription-Production"
+    appServiceName: "taskmanager-api-prod"
+    resourceGroup: "taskmanager-prod-rg"
+  ${{ if eq(variables['Build.SourceBranchName'], 'development' }}:
+    environment: "development"
+    azureSubscription: "Your-Azure-Subscription-Dev"
+    appServiceName: "taskmanager-api-dev"
+    resourceGroup: "taskmanager-dev-rg"
+
+stages:
+  - stage: Build
+    displayName: "Build Server"
+    jobs:
+      - job: BuildJob
+        displayName: "Build and Test"
+        steps:
+          # Checkout code
+          - checkout: self
+            displayName: "Checkout Repository"
+
+          # Setup Node.js
+          - task: NodeTool@0
+            displayName: "Install Node.js"
+            inputs:
+              versionSpec: $(nodeVersion)
+
+          # Install dependencies
+          - script: |
+              cd $(workingDirectory)
+              npm ci
+            displayName: "npm ci - Install dependencies"
+
+          # Run Prisma generate
+          - script: |
+              cd $(workingDirectory)
+              npx prisma generate
+            displayName: "Generate Prisma Client"
+
+          # Run linting
+          - script: |
+              cd $(workingDirectory)
+              npm run lint || echo "No lint script found"
+            displayName: "Run ESLint"
+            continueOnError: true
+
+          # Build TypeScript with tsc
+          - script: |
+              cd $(workingDirectory)
+              npx tsc
+            displayName: "Build TypeScript"
+            env:
+              NODE_ENV: production
+
+          # Copy necessary files for deployment
+          - task: CopyFiles@2
+            displayName: "Copy Files to Staging"
+            inputs:
+              SourceFolder: "$(workingDirectory)"
+              Contents: |
+                dist/**
+                package*.json
+                prisma/**
+                .env.example
+              TargetFolder: "$(Build.ArtifactStagingDirectory)/server"
+              CleanTargetFolder: true
+
+          # Publish build artifacts
+          - task: PublishBuildArtifacts@1
+            displayName: "Publish Artifacts"
+            inputs:
+              PathtoPublish: "$(Build.ArtifactStagingDirectory)/server"
+              ArtifactName: "server-drop"
+              publishLocation: "Container"
+
+  - stage: Deploy
+    displayName: "Deploy to Azure"
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - deployment: DeployAPI
+        displayName: "Deploy to App Service"
+        environment: $(environment)
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                # Download artifacts
+                - download: current
+                  artifact: "server-drop"
+                  displayName: "Download Build Artifacts"
+
+                # Deploy to Azure App Service
+                - task: AzureWebApp@1
+                  displayName: "Deploy to Azure App Service"
+                  inputs:
+                    azureSubscription: $(azureSubscription)
+                    appType: "webAppLinux"
+                    appName: $(appServiceName)
+                    package: "$(Pipeline.Workspace)/server-drop"
+                    runtimeStack: "NODE|18-lts"
+                    startUpCommand: "npm install && npx prisma generate && node dist/index.js"
+
+                # Run database migrations
+                - task: AzureCLI@2
+                  displayName: "Run Prisma Migrations"
+                  inputs:
+                    azureSubscription: $(azureSubscription)
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      az webapp ssh --name $(appServiceName) --resource-group $(resourceGroup) --command "cd /home/site/wwwroot && npx prisma migrate deploy"
+
+                # Configure App Settings
+                - task: AzureAppServiceSettings@1
+                  displayName: "Configure App Settings"
+                  inputs:
+                    azureSubscription: $(azureSubscription)
+                    appName: $(appServiceName)
+                    resourceGroupName: $(resourceGroup)
+                    appSettings: |
+                      [
+                        {
+                          "name": "NODE_ENV",
+                          "value": "production",
+                          "slotSetting": false
+                        },
+                        {
+                          "name": "PORT",
+                          "value": "8080",
+                          "slotSetting": false
+                        },
+                        {
+                          "name": "WEBSITE_NODE_DEFAULT_VERSION",
+                          "value": "~18",
+                          "slotSetting": false
+                        }
+                      ]
