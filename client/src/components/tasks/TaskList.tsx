@@ -2,7 +2,12 @@ import React, { useEffect, useState } from "react";
 import type { Task, TaskFormData } from "../../core/interface/task.interface";
 import { clearError } from "../../core/store/authSlice";
 import { useAppDispatch, useAppSelector } from "../../core/store/hooks";
-import { fetchTasks, updateTask, createTask } from "../../core/store/taskSlice";
+import {
+  fetchTasks,
+  updateTask,
+  createTask,
+  deleteTask,
+} from "../../core/store/taskSlice";
 import TaskModal from "./TaskModal";
 import TaskCard from "./TaskCard";
 
@@ -44,6 +49,10 @@ const TaskList: React.FC = () => {
       await dispatch(createTask(taskData));
     }
     handleCloseModal();
+  };
+
+  const handleDeleteTask = (taskId: string) => {
+    dispatch(deleteTask(taskId));
   };
 
   return (
@@ -88,6 +97,7 @@ const TaskList: React.FC = () => {
               key={task.id}
               task={task}
               onClick={() => handleOpenModal(task)}
+              onDelete={handleDeleteTask}
             />
           ))}
         </div>

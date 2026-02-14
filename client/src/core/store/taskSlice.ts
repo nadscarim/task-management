@@ -52,6 +52,14 @@ export const updateTask = createAsyncThunk<Task, UpdateTaskPayload>(
   },
 );
 
+export const deleteTask = createAsyncThunk<string, string>(
+  "tasks/deleteTask",
+  async (id: string) => {
+    await axios.delete(`/api/v1/tasks/${id}`);
+    return id;
+  },
+);
+
 // Slice
 const taskSlice = createSlice({
   name: "tasks",
@@ -133,6 +141,24 @@ const taskSlice = createSlice({
       .addCase(updateTask.rejected, (state, action) => {
         state.loading = false;
         state.error = action.error.message || "Failed to update task";
+      })
+
+      // Delete task
+      .addCase(deleteTask.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
+      .addCase(deleteTask.fulfilled, (state, action: PayloadAction<string>) => {
+        state.loading = false;
+        state.tasks = state.tasks.filter((task) => task.id !== action.payload);
+        if (state.currentTask?.id === action.payload) {
+          state.currentTask = null;
+        }
+        state.error = null;
+      })
+      .addCase(deleteTask.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.error.message || "Failed to delete task";
       });
   },
 });
